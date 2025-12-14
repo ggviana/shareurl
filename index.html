@@ -1,0 +1,224 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Share URL Test (Share + QR + NFC)</title>
+    <style>
+      body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; padding: 24px; max-width: 920px; margin: 0 auto; }
+      button { padding: 10px 14px; font-size: 16px; cursor: pointer; }
+      button:disabled { opacity: 0.5; cursor: not-allowed; }
+      input { width: 100%; padding: 10px; font-size: 16px; margin: 10px 0 14px; }
+      .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+      .card { border: 1px solid #ddd; border-radius: 12px; padding: 16px; margin-top: 16px; }
+      .ok { color: #0a7; }
+      .warn { color: #b60; }
+      .err { color: #c00; }
+      #log { margin: 0; white-space: pre-wrap; word-break: break-word; background: #f6f6f6; padding: 12px; border-radius: 10px; min-height: 80px; }
+      #qrWrap { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; }
+      #qr { width: 220px; height: 220px; border-radius: 12px; background: #fff; border: 1px solid #ddd; display: grid; place-items: center; overflow: hidden; }
+      #qr img { width: 100%; height: 100%; object-fit: contain; }
+      .hint { color: #666; font-size: 14px; }
+      .small { font-size: 13px; color: #666; }
+      code { background: #f2f2f2; padding: 2px 6px; border-radius: 6px; }
+    </style>
+  </head>
+  <body>
+    <h1>Share URL test</h1>
+
+    <div class="card">
+      <label for="url">URL to share</label>
+      <input id="url" type="url" value="https://example.com" />
+
+      <div class="row">
+        <button id="share">Share (OS share sheet)</button>
+        <button id="copy">Copy</button>
+        <button id="showqr">Show QR</button>
+        <button id="writenfc">Write NFC</button>
+      </div>
+
+      <div class="hint" style="margin-top:10px">
+        Android Chrome: Share often includes Bluetooth; NFC writing may work if Web NFC is supported.
+        iOS Safari: Web NFC generally won’t work; use QR/Copy.
+      </div>
+    </div>
+
+    <div class="card">
+      <h2 style="margin-top:0">QR fallback</h2>
+      <div id="qrWrap">
+        <div id="qr" aria-label="QR code area">
+          <div class="small">Click “Show QR”</div>
+        </div>
+        <div>
+          <div id="qrText" class="small"></div>
+          <div class="small" style="margin-top:8px">
+            Uses a free QR image endpoint for quick testing. For production, generate QR locally.
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2 style="margin-top:0">Support & log</h2>
+      <div id="support"></div>
+      <pre id="log"></pre>
+    </div>
+
+    <script>
+      const $ = (id) => document.getElementById(id);
+
+      const urlEl = $("url");
+      const qrEl = $("qr");
+      const qrTextEl = $("qrText");
+      const supportEl = $("support");
+      const logEl = $("log");
+
+      const shareBtn = $("share");
+      const copyBtn = $("copy");
+      const showQrBtn = $("showqr");
+      const writeNfcBtn = $("writenfc");
+
+      function log(msg, cls) {
+        const line = document.createElement("div");
+        if (cls) line.className = cls;
+        line.textContent = msg;
+        logEl.appendChild(line);
+      }
+
+      function currentUrl() {
+        return urlEl.value.trim();
+      }
+
+      function setSupport() {
+        const hasShare = !!navigator.share;
+        const hasClipboard = !!(navigator.clipboard && navigator.clipboard.writeText);
+        const hasNfc = ("NDEFWriter" in window);
+
+        supportEl.innerHTML = `
+          <div>Web Share API: <b class="${hasShare ? "ok" : "warn"}">${hasShare ? "supported" : "not supported"}</b></div>
+          <div>Clipboard API: <b class="${hasClipboard ? "ok" : "warn"}">${hasClipboard ? "supported" : "not supported"}</b></div>
+          <div>Web NFC (NDEFWriter): <b class="${hasNfc ? "ok" : "warn"}">${hasNfc ? "supported" : "not supported"}</b></div>
+          <div class="small" style="margin-top:8px">
+            Note: Web NFC usually requires <code>https</code> and user interaction. Some devices/browsers don’t support it.
+          </div>
+        `;
+
+        writeNfcBtn.disabled = !hasNfc;
+        writeNfcBtn.title = hasNfc ? "" : "Web NFC not supported in this browser/device";
+      }
+
+      function renderQr(url) {
+        if (!url) {
+          qrEl.innerHTML = `<div class="small">Enter a URL first</div>`;
+          qrTextEl.textContent = "";
+          return;
+        }
+
+        const src =
+          "https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=" +
+          encodeURIComponent(url);
+
+        const img = new Image();
+        img.alt = "QR code";
+        img.src = src;
+
+        qrEl.innerHTML = "";
+        qrEl.appendChild(img);
+        qrTextEl.textContent = url;
+
+        log("QR rendered.", "ok");
+      }
+
+      async function shareUrl() {
+        const url = currentUrl();
+        if (!url) return log("Please enter a URL.", "warn");
+
+        if (!navigator.share) {
+          log("Web Share API not supported here. Showing QR fallback.", "warn");
+          renderQr(url);
+          return;
+        }
+
+        try {
+          if (navigator.canShare && !navigator.canShare({ url })) {
+            log("This browser says it can't share this URL. Showing QR fallback.", "warn");
+            renderQr(url);
+            return;
+          }
+
+          await navigator.share({ title: document.title, text: "Link", url });
+          log("Share sheet opened (success if user completed).", "ok");
+        } catch (e) {
+          log(`Share failed/cancelled: ${e?.name || "Error"} - ${e?.message || e}`, "err");
+          log("Showing QR fallback.", "warn");
+          renderQr(url);
+        }
+      }
+
+      async function copyUrl() {
+        const url = currentUrl();
+        if (!url) return log("Please enter a URL.", "warn");
+
+        try {
+          if (!(navigator.clipboard && navigator.clipboard.writeText)) {
+            const ta = document.createElement("textarea");
+            ta.value = url;
+            document.body.appendChild(ta);
+            ta.select();
+            document.execCommand("copy");
+            ta.remove();
+            log("Copied (legacy method).", "ok");
+            return;
+          }
+
+          await navigator.clipboard.writeText(url);
+          log("Copied to clipboard.", "ok");
+        } catch (e) {
+          log(`Copy failed: ${e?.name || "Error"} - ${e?.message || e}`, "err");
+        }
+      }
+
+      async function writeNfc() {
+        const url = currentUrl();
+        if (!url) return log("Please enter a URL.", "warn");
+
+        if (!("NDEFWriter" in window)) {
+          log("Web NFC not supported here. Use QR/Copy instead.", "warn");
+          return;
+        }
+
+        try {
+          // Requires a user gesture (click). Also usually requires HTTPS and Android Chrome.
+          const writer = new NDEFWriter();
+
+          // Write as a well-known URL record. Many phones will open it when tapped.
+          await writer.write({
+            records: [{ recordType: "url", data: url }]
+          });
+
+          log("NFC write started/succeeded. Now tap an NFC tag near your phone.", "ok");
+        } catch (e) {
+          log(`NFC write failed: ${e?.name || "Error"} - ${e?.message || e}`, "err");
+          log("Showing QR fallback.", "warn");
+          renderQr(url);
+        }
+      }
+
+      // Hook up UI
+      shareBtn.addEventListener("click", shareUrl);
+      copyBtn.addEventListener("click", copyUrl);
+      showQrBtn.addEventListener("click", () => renderQr(currentUrl()));
+      writeNfcBtn.addEventListener("click", writeNfc);
+
+      // Auto-update QR while typing (handy for testing)
+      let t;
+      urlEl.addEventListener("input", () => {
+        clearTimeout(t);
+        t = setTimeout(() => renderQr(currentUrl()), 250);
+      });
+
+      setSupport();
+      log("Ready. Try Share → Bluetooth (if available), or Write NFC, or QR.", "ok");
+    </script>
+  </body>
+</html>
